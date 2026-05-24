@@ -1,9 +1,8 @@
 """
-Background task: SOP matching logic.
+Closira Backend - SOP Automation Task
 
-Runs after every new enquiry via FastAPI BackgroundTasks.
-Matches inbound message to one of 5 hardcoded SOPs using keyword logic.
-If no SOP matches, auto-escalates and logs the event.
+Processes raw text payloads in background loops to isolate intent, match predefined 
+response rule sets, or flag exceptional inputs for human review.
 """
 
 import json
@@ -14,35 +13,10 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models import Enquiry, EnquiryEvent, EnquiryStatus
 
-
-# ── Structured JSON logging ───────────────────────────────────────────────────
-
-class _JSONFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        payload = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "level": record.levelname,
-            "message": record.getMessage(),
-            "module": record.module,
-        }
-        return json.dumps(payload)
+logger = logging.getLogger(__name__)
 
 
-def _build_logger(name: str) -> logging.Logger:
-    log = logging.getLogger(name)
-    if not log.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(_JSONFormatter())
-        log.addHandler(handler)
-    log.setLevel(logging.INFO)
-    return log
-
-
-logger = _build_logger(__name__)
-
-
-# ── SOP definitions ───────────────────────────────────────────────────────────
-# Each SOP: list of trigger keywords + a suggested response template.
+# ── Automation Routing Rules ──────────────────────────────────────────────────
 
 SOPS: dict[str, dict] = {
     "booking_enquiry": {
@@ -92,20 +66,19 @@ SOPS: dict[str, dict] = {
 }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Pipeline Utilities ────────────────────────────────────────────────────────
 
 def _match_sop(message: str) -> tuple[str | None, str | None]:
-    """Return (sop_name, suggested_response) or (None, None)."""
+    """Scans clean input string text against hardcoded signature phrases."""
     msg_lower = message.lower()
     for sop_name, sop_data in SOPS.items():
-        for keyword in sop_data["keywords"]:
-            if keyword in msg_lower:
-                return sop_name, sop_data["response"]
+        if any(keyword in msg_lower for keyword in sop_data["keywords"]):
+            return sop_name, sop_data["response"]
     return None, None
 
 
 def _log_event(db: Session, enquiry_id: str, event_type: str, detail: str | None = None) -> None:
-    """Append an immutable event to the enquiry timeline."""
+    """Commits an immutable timeline entry tracking internal status progression."""
     event = EnquiryEvent(
         enquiry_id=enquiry_id,
         event_type=event_type,
@@ -115,36 +88,31 @@ def _log_event(db: Session, enquiry_id: str, event_type: str, detail: str | None
     db.commit()
 
 
-# ── Main background task ──────────────────────────────────────────────────────
+# ── Background Execution Engine ───────────────────────────────────────────────
 
 def process_enquiry(enquiry_id: str) -> None:
     """
-    Background task entry point.
-    1. Load enquiry.
-    2. Mark as PROCESSING.
-    3. Run SOP keyword match.
-    4. Update status to SOP_MATCHED or ESCALATED.
-    5. Log structured events throughout.
+    Main ingestion execution worker pipeline task.
     """
     logger.info(json.dumps({"event": "task_started", "enquiry_id": enquiry_id}))
 
     db = SessionLocal()
     try:
-        enquiry: Enquiry | None = db.query(Enquiry).filter(Enquiry.id == enquiry_id).first()
-
+        enquiry = db.query(Enquiry).filter(Enquiry.id == enquiry_id).first()
         if not enquiry:
-            logger.error(json.dumps({
-                "event": "task_error",
-                "enquiry_id": enquiry_id,
-                "reason": "Enquiry record not found in DB.",
-            }))
+            logger.error(
+                json.dumps({
+                    "event": "task_error",
+                    "enquiry_id": enquiry_id,
+                    "reason": "Enquiry target record missing from storage engine layer.",
+                })
+            )
             return
 
-        # ── Step 1: mark processing ───────────────────────────────────────────────
+        # Advance state to active processing loop
         enquiry.status = EnquiryStatus.PROCESSING
         db.commit()
 
-        # ── Step 2: SOP match ─────────────────────────────────────────────────────
         sop_name, suggested_response = _match_sop(enquiry.message)
 
         if sop_name:
@@ -153,33 +121,41 @@ def process_enquiry(enquiry_id: str) -> None:
             enquiry.status = EnquiryStatus.SOP_MATCHED
             db.commit()
 
-            _log_event(db, enquiry_id, "sop_matched", f"Matched SOP: {sop_name}")
-            logger.info(json.dumps({
-                "event": "sop_matched",
-                "enquiry_id": enquiry_id,
-                "sop": sop_name,
-            }))
-
+            _log_event(db, enquiry_id, "sop_matched", f"Matched automated track: {sop_name}")
+            
+            logger.info(
+                json.dumps({
+                    "event": "sop_matched",
+                    "enquiry_id": enquiry_id,
+                    "sop": sop_name,
+                })
+            )
         else:
-            # ── Step 3: auto-escalate if no SOP matches ───────────────────────────
+            # Drop through to immediate agent alert escalation pool on match failure
             enquiry.status = EnquiryStatus.ESCALATED
-            enquiry.escalation_reason = "No SOP matched for inbound message. Flagged for human review."
+            enquiry.escalation_reason = "No matching customer communication SOP signature found."
             db.commit()
 
             _log_event(
                 db, enquiry_id, "auto_escalated",
-                "No SOP matched. Enquiry escalated to human agent automatically.",
+                "Fallback mechanism: escalated automatically due to missing intent matching rule context.",
             )
-            logger.warning(json.dumps({
-                "event": "escalation_triggered",
-                "enquiry_id": enquiry_id,
-                "reason": "No SOP matched",
-            }))
+            
+            logger.warning(
+                json.dumps({
+                    "event": "escalation_triggered",
+                    "enquiry_id": enquiry_id,
+                    "reason": "unmatched_intent_payload",
+                })
+            )
 
-        logger.info(json.dumps({
-            "event": "task_completed",
-            "enquiry_id": enquiry_id,
-            "final_status": enquiry.status,
-        }))
+        logger.info(
+            json.dumps({
+                "event": "task_completed",
+                "enquiry_id": enquiry_id,
+                "final_status": enquiry.status,
+            })
+        )
+        
     finally:
         db.close()

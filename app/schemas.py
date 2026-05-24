@@ -1,40 +1,29 @@
 from datetime import datetime
 from typing import List, Optional
-
 from pydantic import BaseModel, Field
-
 from app.models import Channel
 
 
-# ── Request bodies ────────────────────────────────────────────────────────────
-
 class EnquiryCreate(BaseModel):
-    channel: Channel = Field(..., example="whatsapp")
-    customer_name: str = Field(..., min_length=1, max_length=255, example="Rahul Sharma")
-    message: str = Field(..., min_length=1, example="Hi, I'd like to book an appointment.")
+    channel: Channel = Field(..., json_schema_extra={"example": "whatsapp"})
+    customer_name: str = Field(..., min_length=1, max_length=255, json_schema_extra={"example": "Rahul Sharma"})
+    message: str = Field(..., min_length=1, json_schema_extra={"example": "Hi, I'd like to book an appointment."})
 
     model_config = {"use_enum_values": True}
 
 
 class FollowUpRequest(BaseModel):
-    delay_minutes: int = Field(..., ge=1, le=10080, example=30,
-                               description="Delay in minutes before the follow-up is sent (max 1 week).")
-    message_template: Optional[str] = Field(
-        None,
-        example="Hi {customer_name}, just following up on your enquiry.",
-        description="Optional message template. Use {customer_name} as a placeholder.",
-    )
+    delay_minutes: int = Field(..., ge=1, le=10080, json_schema_extra={"example": 30})
+    message_template: Optional[str] = Field(None, json_schema_extra={"example": "Hi {customer_name}, just following up."})
 
 
 class EscalateRequest(BaseModel):
-    reason: str = Field(..., min_length=1, example="Customer requested to speak to a human agent.")
+    reason: str = Field(..., min_length=1, json_schema_extra={"example": "Customer requested human agent."})
 
-
-# ── Response bodies ───────────────────────────────────────────────────────────
 
 class EnquiryCreatedResponse(BaseModel):
-    job_id: str = Field(..., example="3f1c2d4e-...")
-    message: str = Field(default="Enquiry received. Processing in background.")
+    job_id: str = Field(..., json_schema_extra={"example": "3f1c2d4e-b5a1-4f9e-8c3d-2b1a0c9d8e7f"})
+    message: str = "Enquiry received. Processing in background."
 
 
 class EnquiryEventOut(BaseModel):
@@ -65,6 +54,6 @@ class EnquiryOut(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    status: str = Field(example="ok")
-    database: str = Field(example="connected")
-    app: str = Field(example="Closira Backend")
+    status: str = Field(..., json_schema_extra={"example": "ok"})
+    database: str = Field(..., json_schema_extra={"example": "connected"})
+    app: str = Field(..., json_schema_extra={"example": "Closira Backend"})
